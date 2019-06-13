@@ -1,5 +1,5 @@
 % Deserializes headerString into struct format.
-function Header = extractHeader(headerString)
+function Header = deserialize(headerString)
 % only carriage returns are present in this data.
 pairs = split(split(strip(headerString), sprintf('\r')), '=');
 for i=1:size(pairs, 1)
