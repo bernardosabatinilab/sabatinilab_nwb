@@ -20,4 +20,3 @@ if ischar(values(1).(valueName))
 else
     values = [values.(valueName)];
 end
-

@@ -4,7 +4,17 @@ function Header = deserialize(headerString)
 pairs = split(split(strip(headerString), sprintf('\r')), '=');
 for i=1:size(pairs, 1)
     value = pairs{i, 2};
-    if all(isstrprop(value, 'digit'))
+    
+    valuePointsMask = false(size(value));
+    correctPointsIdx = find(value == '.', 1); % only one decimal point allowed
+    if ~isempty(correctPointsIdx)
+        valuePointsMask(correctPointsIdx) = true;
+    end
+    valueNegativeMask = value == '-'; % Unary negation
+    filteredValuesIdx = valuePointsMask | valueNegativeMask;
+    valueIsNan = ~any(filteredValuesIdx) && strcmp(value, 'NaN');
+    valueIsDigits = all(isstrprop(value(~filteredValuesIdx), 'digit'));
+    if valueIsNan || valueIsDigits
         value = str2double(value);
     elseif startsWith(value, '''') && endsWith(value, '''')
         if length(value) == 2
