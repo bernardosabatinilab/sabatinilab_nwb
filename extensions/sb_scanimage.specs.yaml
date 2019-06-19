@@ -1,0 +1,36 @@
+groups:
+- neurodata_type_def: ScanImageMetaData
+  neurodata_type_inc: LabMetaData
+  name: scanimage_metadata
+  doc: ScanImage-specific metadata
+  attributes:
+  - name: help
+    dtype: text
+    doc: Software timer version
+    value: software timer version
+  datasets:
+  - name: software_timer_version
+    dtype: int
+    doc: Software timer version
+  - name: startup_time
+    dtype: isodatetime
+    doc: startup time
+- neurodata_type_def: CycleFiles
+  neurodata_type_inc: LabMetaData
+  name: cycle_file
+  doc: Associated Cycle Files
+  attributes:
+  - name: help
+    dtype: text
+    doc: table of cycle locations and names
+    value: table of cycle locations and names
+  datasets:
+  - name: cycle_table
+    dtype:
+    - name: name
+      dtype: text
+      doc: Cycle file name
+    - name: path
+      dtype: text
+      doc: Cycle path location
+    doc: Table with columns indicating unique cycle configuration files

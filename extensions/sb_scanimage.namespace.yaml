@@ -1,0 +1,9 @@
+namespaces:
+- author: Lawrence Niu
+  contact: lawrence@vidriotech.com
+  doc: Extension for use with Bernardo-Sabatini ScanImage
+  name: sb_scanimage
+  schema:
+  - namespace: core
+  - source: sb_scanimage.specs.yaml
+  version: '0.1'
