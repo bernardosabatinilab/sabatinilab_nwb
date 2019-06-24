@@ -7,7 +7,7 @@ from pynwb.spec import NWBNamespaceBuilder
 # ScanImage MetaData
 metadata_datasets = [
     NWBDatasetSpec('Software timer version',
-                   name='software_timer_version',
+                   name='timer_version',
                    dtype='int'),
     NWBDatasetSpec('startup time',
                    name='startup_time',
@@ -22,30 +22,7 @@ metadata_spec = NWBGroupSpec('ScanImage-specific metadata',
                              datasets=metadata_datasets,
                              attributes=metadata_attr,
                              neurodata_type_inc='LabMetaData',
-                             neurodata_type_def='ScanImageMetaData')
-
-# Cycle Data
-cycledata_columns = [
-    NWBDtypeSpec('name', 'Cycle file name', 'text'),
-    NWBDtypeSpec('path', 'Cycle path location', 'text')
-]
-cycledata_table = [
-    NWBDatasetSpec(
-        'Table with columns indicating unique cycle configuration files',
-        name='cycle_table',
-        dtype=cycledata_columns)
-]
-
-cycledata_attr = [
-    NWBAttributeSpec('help', 'table of cycle locations and names', 'text',
-                     value='table of cycle locations and names')
-]
-cycle_spec = NWBGroupSpec('Associated Cycle Files',
-                          name='cycle_file',
-                          datasets=cycledata_table,
-                          attributes=cycledata_attr,
-                          neurodata_type_inc='LabMetaData',
-                          neurodata_type_def='CycleFiles')
+                             neurodata_type_def='ScanImageMetadata')
 
 # Export namespace
 ext_source = 'sb_scanimage.specs.yaml'
@@ -56,7 +33,6 @@ ns_builder = NWBNamespaceBuilder(
     author='Lawrence Niu',
     contact='lawrence@vidriotech.com')
 ns_builder.add_spec(ext_source, metadata_spec)
-ns_builder.add_spec(ext_source, cycle_spec)
 
 ns_path = 'sb_scanimage.namespace.yaml'
 ns_builder.export(ns_path)
