@@ -81,11 +81,94 @@ for iChannel=1:length(Data.channels)
     channelName = sprintf('Channel %d', channel.label);
     electrode = types.core.IntracellularElectrode(...
         'description', [channelName ' electrode'],...
-        'filtering', sprintf('Gain Multiplier: x%d', channel.gainMultiplier),...
+        'filtering', sprintf('Gain: %d', channel.gain),...
         'device', channel_device);
     nwbFile.general_intracellular_ephys.set(channelName, electrode);
     channel2PathMap(channel.label) = ['/general/intracellular_ephys/', channelName];
 end
+
+%% Sweep Table
+
+nRows = length(Data.raw.sweep);
+idColumn = types.core.ElementIdentifiers('data', 1:nRows);
+
+sweepNumberColumn = types.core.VectorData(...
+    'data', Data.raw.sweep,...
+    'description', 'sweep number');
+epochNumberColumn = types.core.VectorData(...
+    'data', Data.raw.epoch,...
+    'description', 'epoch number');
+channelNumberColumn = types.core.VectorData(...
+    'data', Data.raw.channel,...
+    'description', 'channel number');
+pulseToUseColumn = types.core.VectorData(...
+    'data', Data.raw.pulse,...
+    'description', 'stimulus template external index');
+
+% construct raw-aligned data from acqTrace-aligned, channel-separated data
+% note, 0th and 1st channel indicate offsets used by cell params.  Does not
+% necessarily align with actual channel labels used by acquisition files.
+channel0 = Data.raw.channel == min(Data.raw.channel);
+channel1 = ~channel0;
+channel0ToRawIdx = zeros(size(Data.raw.sweep(channel0)));
+channel1ToRawIdx = zeros(size(Data.raw.sweep(channel1)));
+for iAcqSweep=1:length(Data.acqSweeps)
+   sweepMask0 = Data.raw.sweep(channel0) == Data.acqSweeps(iAcqSweep);
+   sweepMask1 = Data.raw.sweep(channel1) == Data.acqSweeps(iAcqSweep);
+   
+   channel0ToRawIdx(sweepMask0) = iAcqSweep;
+   channel1ToRawIdx(sweepMask1) = iAcqSweep;
+end
+
+cellParams0 = Data.cellParams(1);
+cellParams1 = Data.cellParams(2);
+
+membraneCapacitance = zeros(nRows,1);
+membraneCapacitance(channel0) = cellParams0.membraneCapacitance(channel0ToRawIdx);
+membraneCapacitance(channel1) = cellParams1.membraneCapacitance(channel1ToRawIdx);
+membraneCapacitanceColumn = types.core.VectorData(...
+    'data', membraneCapacitance,...
+    'description', 'Cell membrane capacitance (pF)');
+
+membraneResistance = zeros(nRows,1);
+membraneResistance(channel0) = cellParams0.membraneResistance(channel0ToRawIdx);
+membraneResistance(channel1) = cellParams1.membraneResistance(channel1ToRawIdx);
+membraneResistanceColumn = types.core.VectorData(...
+    'data', membraneResistance,...
+    'description', 'Cell membrane resistance (ohms)');
+
+membraneVoltage = zeros(nRows,1);
+membraneVoltage(channel0) = cellParams0.membraneVoltage(channel0ToRawIdx);
+membraneVoltage(channel1) = cellParams1.membraneVoltage(channel1ToRawIdx);
+membraneVoltageColumn = types.core.VectorData(...
+    'data', membraneVoltage,...
+    'description', 'Cell membrane voltage (mV)');
+
+seriesResistance = zeros(nRows,1);
+seriesResistance(channel0) = cellParams0.seriesResistance(channel0ToRawIdx);
+seriesResistance(channel1) = cellParams1.seriesResistance(channel1ToRawIdx);
+seriesResistanceColumn = types.core.VectorData(...
+    'data', seriesResistance,...
+    'description', 'Series Resistance (ohms)');
+
+columns = {'id', 'series', 'series_index', 'sweep_number', 'epoch', 'channel', 'pulse',...
+    'membrane_capacitance', 'membrane_resistance', 'membrane_voltage',...
+    'holding_current', 'series_resistance'};
+sweepTable = types.core.SweepTable(...
+    'colnames', columns,...
+    'description', 'sweep table',...
+    'id', idColumn,...
+    'sweep_number', sweepNumberColumn,...
+    'epoch', epochNumberColumn,...
+    'channel', channelNumberColumn,...
+    'pulse', pulseToUseColumn,...
+    'membrane_capacitance', membraneCapacitanceColumn,...
+    'membrane_resistance', membraneResistanceColumn,...
+    'membrane_voltage', membraneVoltageColumn,...
+    'series_resistance', seriesResistanceColumn);
+
+nwbFile.general_intracellular_ephys_sweep_table = sweepTable;
+nwbFile.session_description = sprintf('Data for Cell %s', cellName);
 
 
 %% Analysis (Averaged) Data
@@ -96,9 +179,15 @@ for iAvg=1:length(Data.average.data)
     pulse = Data.average.pulse(iAvg);
     sweeps = Data.average.sweep_group{iAvg};
     
+    startTimeMinutes = Data.acqTime(Data.acqSweeps == min(sweeps));
+    
     averageName = sprintf('Channel %d Epoch %d Pulse %d', channel, epoch, pulse);
     channelIdx = [Data.channels.label] == channel;
+    electrodeLink = types.untyped.SoftLink(channel2PathMap(channel));
+    
     clampType = Data.channels(channelIdx).clampType;
+    gain = Data.channels(channelIdx).gain;
+    rate = Data.channels(channelIdx).inputRate;
     formatSweeps = num2cell(sweeps);
     for iFormatSweeps=1:length(formatSweeps)
         formatSweeps{iFormatSweeps} = num2str(formatSweeps{iFormatSweeps});
@@ -107,7 +196,11 @@ for iAvg=1:length(Data.average.data)
     clampSeries = initClampSeries(clampType,...
         'data', Data.average.data{iAvg},...
         'stimulus_description', sprintf('Pulse %d', pulse),...
-        'description', sprintf('Sweep Numbers [%s]', formatSweeps));
+        'description', sprintf('Sweep Numbers [%s]', formatSweeps),...
+        'electrode', electrodeLink,...
+        'starting_time', startTimeMinutes * 60,...
+        'starting_time_rate', rate,...
+        'gain', gain);
     nwbFile.analysis.set(averageName, clampSeries);
 end
 
@@ -120,55 +213,42 @@ for iData=1:length(Data.raw.data)
     channel = Data.raw.channel(iData);
     sweep = Data.raw.sweep(iData);
     pulse = Data.raw.pulse(iData);
-    acquisitionName = sprintf('Channel %d Sweep %d', channel, sweep);
+    acqIdx = Data.acqSweeps == sweep;
+    
+    acquisitionName = sprintf('Channel %d Sweep %03d', channel, sweep);
     channelIdx = [Data.channels.label] == channel;
+    electrodeLink = types.untyped.SoftLink(channel2PathMap(channel));
     clampType = Data.channels(channelIdx).clampType;
-    startTimeMinutes = Data.acqTime(sweep);
+    gain = Data.channels(channelIdx).gain;
+    rate = Data.channels(channelIdx).inputRate;
+    startTimeMinutes = Data.acqTime(acqIdx);
     clampSeries = initClampSeries(clampType,...
         'starting_time', startTimeMinutes * 60,... in Seconds
-        'starting_time_rate', Data.channels(channelIdx).inputRate,...
+        'starting_time_rate', rate,...
         'data', Data.raw.data{iData},...
         'stimulus_description', sprintf('Pulse %d', pulse),...
-        'sweep_number', sweep);
+        'sweep_number', sweep,...
+        'electrode', electrodeLink,...
+        'gain', gain);
+    if clampType == experiment.ClampType.Current
+        biasCurrentPicoAmps = Data.cellParams(channelIdx).holdingCurrent(acqIdx);
+        clampSeries.bias_current = biasCurrentPicoAmps * 1e-12;
+    end
     nwbFile.acquisition.set(acquisitionName, clampSeries);
     referencePath = ['/acquisition/', acquisitionName];
     seriesReferences(iData) = types.untyped.ObjectView(referencePath);
 end
 
-%% Sweep Table
-
-nSweeps = length(Data.raw.sweep);
-idColumn = types.core.ElementIdentifiers('data', 1:nSweeps);
+% add references to sweep table
 seriesReferenceColumn = types.core.VectorData(...
     'data', seriesReferences,...
     'description', 'Object references to intracellular data series');
-sweepNumberColumn = types.core.VectorData(...
-    'data', Data.raw.sweep,...
-    'description', 'sweep number');
-epochNumberColumn = types.core.VectorData(...
-    'data', Data.raw.epoch,...
-    'description', 'epoch number');
-channelNumberColumn = types.core.VectorData(...
-    'data', Data.raw.channel,...
-    'description', 'zero-indexed channel');
-pulseToUseColumn = types.core.VectorData(...
-    'data', Data.raw.pulseToUse,...
-    'description', 'stimulus template external index');
-columns = {'id', 'series', 'sweep_number', 'epoch', 'channel', 'pulse',...
-    'membrane_capacitance', 'holding_current', 'membrane_resistance',...
-    'series_resistance', 'membrane_voltage'};
-sweepTable = types.core.SweepTable(...
-    'colnames', columns,...
-    'description', 'sweep table',...
-    'id', idColumn,...
-    'series', seriesReferenceColumn,...
-    'sweep_number', sweepNumberColumn,...
-    'epoch', epochNumberColumn,...
-    'channel', channelNumberColumn,...
-    'pulse', pulseToUseColumn);
-
-nwbFile.general_intracellular_ephys_sweep_table = sweepTable;
-nwbFile.session_description = sprintf('Data for Cell %s', cellName);
+seriesReferencePath = '/general/intracellular_ephys/sweep_table/series';
+seriesIndexColumn = types.core.VectorIndex(...
+    'target', types.untyped.ObjectView(seriesReferencePath),...
+    'data', 1:length(Data.raw.sweep));  % 1:1 index
+nwbFile.general_intracellular_ephys_sweep_table.series = seriesReferenceColumn;
+nwbFile.general_intracellular_ephys_sweep_table.series_index = seriesIndexColumn;
 
 %% Images
 if isfield(Data, 'images')
@@ -198,9 +278,20 @@ function Clamp = initClampSeries(clampType, varargin)
 assert(isa(clampType, 'experiment.ClampType'), 'first argument must be a clamp type');
 switch clampType
     case experiment.ClampType.Voltage
-        Clamp = types.core.VoltageClampSeries(varargin{:}, 'data_unit', 'pA');
+        Clamp = types.core.VoltageClampSeries(varargin{:},...
+            'data_unit', 'pA',...
+            'capacitance_fast', 5e-12,... % Farads
+            'capacitance_slow', 0,... % Unused
+            'resistance_comp_bandwidth', 0,...
+            'resistance_comp_correction', 0,...
+            'resistance_comp_prediction', 0,...
+            'whole_cell_capacitance_comp', 0,...
+            'whole_cell_series_resistance_comp', 0);
     case experiment.ClampType.Current
-        Clamp = types.core.CurrentClampSeries(varargin{:}, 'data_unit', 'mV');
+        Clamp = types.core.CurrentClampSeries(varargin{:},...
+            'data_unit', 'mV',...
+            'bridge_balance', 0,... % unused
+            'capacitance_compensation', 0); % unused
     otherwise
         error('Unhandled clamp type %s', char(clampType));
 end
@@ -250,11 +341,20 @@ Data.average = grabAverage(analysedPaths);
 fileNames(isAnalysedData) = [];
 filePaths(isAnalysedData) = [];
 
+%% grab trace alignments
+% maps trace number aligned to acquisition time and cell params
+isTrace = strcmp(fileNames, 'physAcqTrace.mat');
+assert(any(isTrace), 'physAcqTrace.mat expected but not found');
+sweepTrace = loadWave(filePaths{isTrace});
+validTraces = ~isnan(sweepTrace.data);
+Data.acqSweeps = sweepTrace.data(validTraces);
+fileNames(isTrace) = [];
+filePaths(isTrace) = [];
+
 %% grab cell params
 isCellParam = indexFromRegex(fileNames, 'physCell[CIRV][ms][01]\.mat');
 assert(any(isCellParam), 'Found no cell parameters');
-cellParamPaths = filePaths(isCellParam);
-Data.cellParams = grabCellParam(cellParamPaths);
+Data.cellParams = grabCellParam(cellDirectory, fileNames(isCellParam), validTraces);
 fileNames(isCellParam) = [];
 filePaths(isCellParam) = [];
 
@@ -285,13 +385,6 @@ assert(any(isAcqTime), 'physAcqTime.mat expected but not found');
 acqTime = load(filePaths{isAcqTime}, 'physAcqTime');
 Data.acqTime = acqTime.physAcqTime;
 
-%% grab trace alignments
-% maps trace number aligned to acquisition time and cell params
-isTrace = strcmp(fileNames, 'physAcqTrace.mat');
-assert(any(isTrace), 'physAcqTrace.mat expected but not found');
-sweepTrace = loadWave(filePaths{isTrace});
-Data.acqSweeps = sweepTrace.data;
-
 %% grab autonotes
 isAutonotes = strcmp(fileNames, 'autonotes.mat');
 assert(any(isAutonotes), 'autonotes.mat expected but not found');
@@ -305,7 +398,7 @@ mynotes = load(filePaths{isMynotes}, 'notebook');
 Data.mynotes = mynotes.notebook;
 
 %% check for leftovers
-uniqueFileIndex = isMynotes | isAutonotes | isTrace | isAcqTime;
+uniqueFileIndex = isMynotes | isAutonotes | isAcqTime;
 fileNames(uniqueFileIndex) = [];
 if ~isempty(fileNames)
     formattedFileNames = cell(size(fileNames));
@@ -334,7 +427,7 @@ end
 %   outputRate:     double (Hz)
 %   inputRate:      double (Hz)
 %   clampType:      experiment.ClampType
-%   gainMultiplier: double
+%   gain: double
 function Channels = grabChannels(cellDirectory, rawFiles)
 channelLabels = regexp(rawFiles, 'AD(\d)_\d+\.mat', 'tokens', 'once');
 for iLabel=1:length(channelLabels)
@@ -348,7 +441,8 @@ RawHeader = header.deserialize(Raw.UserData.headerString);
 ChannelSettings = RawHeader.state.phys.settings;
 
 clampTypes = {ChannelSettings.currentClamp0, ChannelSettings.currentClamp1};
-for iClamp=1:2
+clampTypes = clampTypes(1:length(channelLabels));
+for iClamp=1:length(clampTypes)
     if clampTypes{iClamp}
         clampTypes{iClamp} = experiment.ClampType.Current;
     else
@@ -356,17 +450,19 @@ for iClamp=1:2
     end
 end
 
+gain = {ChannelSettings.extraGain0, ChannelSettings.extraGain1};
+gain = gain(1:length(clampTypes));
 Channels = struct(...
     'label', num2cell(channelLabels),...
     'type', experiment.PatchType.NoPatch,...
     'outputRate', ChannelSettings.outputRate,...
     'inputRate', ChannelSettings.inputRate,...
     'clampType', clampTypes,...
-    'gainMultiplier', {ChannelSettings.extraGain0, ChannelSettings.extraGain1});
+    'gain', gain);
 
-for iChannel=0:1
-    channelTypeProperty = sprintf('channelType%d', iChannel);
-    Channels(iChannel+1).type = experiment.PatchType(...
+for iChannel=1:length(Channels)
+    channelTypeProperty = sprintf('channelType%d', iChannel - 1);
+    Channels(iChannel).type = experiment.PatchType(...
         ChannelSettings.(channelTypeProperty));
 end
 end
@@ -412,7 +508,7 @@ end
 %   channel:     [ channel # ]
 %   epoch:       [ epoch # ]
 %   pulse:       [ pulse # ]
-%   sweep_group:      { list of sweep #s associated with this average }
+%   sweep_group: { list of sweep #s associated with this average }
 function Average = grabAverage(analysedPaths)
 allocZeros = zeros(size(analysedPaths));
 allocNested = cell(size(analysedPaths));
@@ -434,6 +530,9 @@ for iAverage=1:length(analysedPaths)
     Average.data{iAverage} = Wave.data;
     
     tokens = regexp(Wave.UserData.Components, 'AD\d_(\d+)', 'tokens', 'once');
+    for iTokens=1:length(tokens)
+        tokens(iTokens) = tokens{iTokens};
+    end
     Average.sweep_group{iAverage} = str2double(tokens);
 end
 end
@@ -457,31 +556,31 @@ end
 % All array data is physAcqTrace-aligned.
 % All parameters are separated by channel ID
 % CellParam = array of structs with fields:
-%   channel:             channel ID (0|1)
+%   channelIndex:        (0|1)
 %   membraneCapacitance: [ picofarads ]
 %   membraneResistance:  [ ohms ]
 %   membraneVoltage:     [ millivolts ]
 %   holdingCurrent:      [ picoamps ]
 %   seriesResistance:    [ ohms ]
-function CellParams = grabCellParam(cellParamPaths)
-allocZeros = zeros(size(cellParamPaths));
+function CellParams = grabCellParam(cellDirectory, paramNames, validTraces)
 CellParams = struct(...
-    'channel', {0, 1},... % Creates two structs with 0 and 1 for each channel
-    'membraneCapacitance', allocZeros,...
-    'membraneResistance', allocZeros,...
-    'membraneVoltage', allocZeros,...
-    'holdingCurrent', allocZeros,...
-    'seriesResistance', allocZeros);
-for iParams=1:length(cellParamPaths)
-    fPath = cellParamPaths{iParams};
-    [~, fName, ~] = fileparts(fPath);
+    'channelIndex', {0,1},...
+    'membraneCapacitance', [],...
+    'membraneResistance', [],...
+    'membraneVoltage', [],...
+    'holdingCurrent', [],...
+    'seriesResistance', []);
+
+paramPaths = fullfile(cellDirectory, paramNames);
+for iParams=1:length(paramPaths)
+    fPath = paramPaths{iParams};
+    [~, fName, ~] = fileparts(paramNames{iParams});
     tokens = regexp(fName, 'physCell(..)([01])', 'tokens', 'once');
     cellParam = tokens{1};
-    channelIndex = str2double(tokens{2});
-    channelIndex = [CellParams.channel] == channelIndex;
+    channelIndex = str2double(tokens{2}) + 1;
     switch cellParam
         case 'Cm'
-            cellParam = 'membranceCapacitance';
+            cellParam = 'membraneCapacitance';
         case 'Im'
             cellParam = 'holdingCurrent';
         case 'Rm'
@@ -489,11 +588,11 @@ for iParams=1:length(cellParamPaths)
         case 'Rs'
             cellParam = 'seriesResistance';
         case 'Vm'
-            cellParam = 'membranceVoltage';
+            cellParam = 'membraneVoltage';
         otherwise
             error('Unknown cell parameter %s', cellParam);
     end
     Wave = loadWave(fPath, fName);
-    CellParams(channelIndex).(cellParam) = Wave.data;
+    CellParams(channelIndex).(cellParam) = real(Wave.data(validTraces));
 end
 end
