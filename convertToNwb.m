@@ -34,19 +34,21 @@ fileEntries = cellDirEntries(~isDirEntries);
 fileNames = {fileEntries.name};
 Data = grabData(cellDirectory, fileNames);
 
+nwbFile.general_notes = strjoin(Data.mynotes, newline);
+
 % session is defined as initial cell break-in
 startTokens = regexp(Data.autonotes, '(.+): Broke into cell on channel #\d',...
     'tokens', 'once');
 validTokensIndex = ~cellfun('isempty', startTokens);
 sessionStartToken = startTokens{validTokensIndex}{1};
-%% session_start_time
 nwbFile.session_start_time = datetime(sessionStartToken,...
     'InputFormat', 'dd-MMM-y HH:mm:ss');
 
 %% metadata
 scanimageMetadata = types.sb_scanimage.ScanImageMetadata(...
     'timer_version', Data.meta.timer_version,...
-    'startup_time', Data.meta.startup_time);
+    'startup_time', Data.meta.startup_time,...
+    'scanimage_notes', strjoin(Data.autonotes, newline));
 nwbFile.general.set('scanimage_meta', scanimageMetadata);
 
 %% Devices
@@ -110,15 +112,11 @@ pulseToUseColumn = types.core.VectorData(...
 % necessarily align with actual channel labels used by acquisition files.
 channel0 = Data.raw.channel == min(Data.raw.channel);
 channel1 = ~channel0;
-channel0ToRawIdx = zeros(size(Data.raw.sweep(channel0)));
-channel1ToRawIdx = zeros(size(Data.raw.sweep(channel1)));
-for iAcqSweep=1:length(Data.acqSweeps)
-   sweepMask0 = Data.raw.sweep(channel0) == Data.acqSweeps(iAcqSweep);
-   sweepMask1 = Data.raw.sweep(channel1) == Data.acqSweeps(iAcqSweep);
-   
-   channel0ToRawIdx(sweepMask0) = iAcqSweep;
-   channel1ToRawIdx(sweepMask1) = iAcqSweep;
-end
+
+[~, channel0ToRawIdx] = ismember(Data.raw.sweep(channel0), Data.acqSweeps);
+[~, channel1ToRawIdx] = ismember(Data.raw.sweep(channel1), Data.acqSweeps);
+assert(all(0 ~= channel0ToRawIdx) && all(0 ~= channel1ToRawIdx),...
+    'Some acquisition data sweeps do not exist in physAcqTrace.');
 
 cellParams0 = Data.cellParams(1);
 cellParams1 = Data.cellParams(2);
@@ -169,7 +167,6 @@ sweepTable = types.core.SweepTable(...
 
 nwbFile.general_intracellular_ephys_sweep_table = sweepTable;
 nwbFile.session_description = sprintf('Data for Cell %s', cellName);
-
 
 %% Analysis (Averaged) Data
 
@@ -261,8 +258,6 @@ if isfield(Data, 'images')
     end
     nwbFile.analysis.set('Cell Images', Images);
 end
-
-%% Notes
 
 %% export NWB
 outDir = 'out';
