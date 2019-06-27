@@ -9,23 +9,23 @@ metadata_datasets = [
     NWBDatasetSpec('Software timer version',
                    name='timer_version',
                    dtype='int'),
-    NWBDatasetSpec('startup time',
+     NWBDatasetSpec('ScanImage startup time',
                    name='startup_time',
-                   dtype='isodatetime'),
+                   dtype='text'),
     NWBDatasetSpec('scanimage auto-generated notes',
                    name='scanimage_notes',
                    dtype='text')
 ]
 metadata_attr = [
-    NWBAttributeSpec('help', 'Software timer version', 'text',
-                     value='software timer version')
+    NWBAttributeSpec('help', 'Metadata from Bernardo-Sabatini ScanImage', 'text',
+                     value='Metadata from Bernardo-Sabatini ScanImage')
 ]
 metadata_spec = NWBGroupSpec('ScanImage-specific metadata',
                              name='scanimage_metadata',
                              datasets=metadata_datasets,
                              attributes=metadata_attr,
                              neurodata_type_inc='LabMetaData',
-                             neurodata_type_def='ScanImageMetadata')
+                             neurodata_type_def='ScanImageMetaData')
 
 # Export namespace
 ext_source = 'sb_scanimage.specs.yaml'
