@@ -304,7 +304,6 @@ end
 %   raw:        grabRaw() struct
 %   average:    grabAverage() struct
 %   cellParams: grabCellParam() struct
-%   acqTime:    [ acquisition time as double ]
 %   acqSweeps:  [ sweep # alignment as double ]
 %   images:     [ Images struct data ]
 %   autonotes:  { ScanImage automation notes line separated cell string }
@@ -368,13 +367,6 @@ end
 fileNames(isJpg) = [];
 filePaths(isJpg) = [];
 
-%% grab acquisition time offsets
-isAcqTime = strcmp(fileNames, 'physAcqTime.mat');
-assert(any(isAcqTime), 'physAcqTime.mat expected but not found');
-% unit is minutes after the break-in time.
-acqTime = load(filePaths{isAcqTime}, 'physAcqTime');
-Data.acqTime = acqTime.physAcqTime;
-
 %% grab autonotes
 isAutonotes = strcmp(fileNames, 'autonotes.mat');
 assert(any(isAutonotes), 'autonotes.mat expected but not found');
@@ -388,8 +380,10 @@ mynotes = load(filePaths{isMynotes}, 'notebook');
 Data.mynotes = mynotes.notebook;
 
 %% check for leftovers
-uniqueFileIndex = isMynotes | isAutonotes | isAcqTime;
+uniqueFileIndex = isMynotes | isAutonotes;
 fileNames(uniqueFileIndex) = [];
+ignoreList = {'physAcqTime.mat'};
+fileNames = setdiff(fileNames, ignoreList);
 if ~isempty(fileNames)
     formattedFileNames = cell(size(fileNames));
     for iLeftovers=1:length(fileNames)
