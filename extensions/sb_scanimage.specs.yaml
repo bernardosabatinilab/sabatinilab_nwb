@@ -12,9 +12,6 @@ groups:
   - name: timer_version
     dtype: int
     doc: Software timer version
-  - name: startup_time
-    dtype: text
-    doc: ScanImage startup time
   - name: scanimage_notes
     dtype: text
     doc: scanimage auto-generated notes

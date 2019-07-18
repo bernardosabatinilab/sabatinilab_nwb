@@ -9,9 +9,6 @@ metadata_datasets = [
     NWBDatasetSpec('Software timer version',
                    name='timer_version',
                    dtype='int'),
-     NWBDatasetSpec('ScanImage startup time',
-                   name='startup_time',
-                   dtype='text'),
     NWBDatasetSpec('scanimage auto-generated notes',
                    name='scanimage_notes',
                    dtype='text')
