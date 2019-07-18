@@ -2,6 +2,7 @@
 function Header = deserialize(headerString)
 % only carriage returns are present in this data.
 pairs = split(split(strip(headerString), sprintf('\r')), '=');
+if numel(pairs)==2, pairs = pairs'; end 
 for i=1:size(pairs, 1)
     value = pairs{i, 2};
     
@@ -14,8 +15,11 @@ for i=1:size(pairs, 1)
     filteredValuesIdx = valuePointsMask | valueNegativeMask;
     valueIsNan = ~any(filteredValuesIdx) && strcmp(value, 'NaN');
     valueIsDigits = all(isstrprop(value(~filteredValuesIdx), 'digit'));
+    valueIsArray = ~isempty(regexp(value,'^(\d+,)+(\d+)$','tokens','once'));
     if valueIsNan || valueIsDigits
         value = str2double(value);
+    elseif valueIsArray
+        value = cellfun(@str2double, strsplit(value,','), 'uni',1);
     elseif startsWith(value, '''') && endsWith(value, '''')
         if length(value) == 2
             value = '';

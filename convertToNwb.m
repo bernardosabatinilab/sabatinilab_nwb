@@ -37,12 +37,8 @@ Data = grabData(cellDirectory, fileNames);
 nwbFile.general_notes = strjoin(Data.mynotes, newline);
 
 % session is defined as initial cell break-in
-startTokens = regexp(Data.autonotes, '(.+): Broke into cell on channel #\d',...
-    'tokens', 'once');
-validTokensIndex = ~cellfun('isempty', startTokens);
-sessionStartToken = startTokens{validTokensIndex}{1};
-nwbFile.session_start_time = datetime(sessionStartToken,...
-    'InputFormat', 'dd-MMM-y HH:mm:ss');
+sessionStartToken = getStartTime(Data);
+nwbFile.session_start_time = datetime(sessionStartToken,'InputFormat', 'dd-MMM-y HH:mm:ss');
 
 %% metadata
 scanimageMetadata = types.sb_scanimage.ScanImageMetaData(...
@@ -436,7 +432,7 @@ RawHeader = header.deserialize(Raw.UserData.headerString);
 ChannelSettings = RawHeader.state.phys.settings;
 
 clampTypes = {ChannelSettings.currentClamp0, ChannelSettings.currentClamp1};
-clampTypes = clampTypes(1:length(channelLabels));
+clampTypes = clampTypes(channelLabels+1);
 for iClamp=1:length(clampTypes)
     if clampTypes{iClamp}
         clampTypes{iClamp} = experiment.ClampType.Current;
@@ -446,7 +442,7 @@ for iClamp=1:length(clampTypes)
 end
 
 gain = {ChannelSettings.extraGain0, ChannelSettings.extraGain1};
-gain = gain(1:length(clampTypes));
+gain = gain(channelLabels+1);
 Channels = struct(...
     'label', num2cell(channelLabels),...
     'type', experiment.PatchType.NoPatch,...
@@ -492,7 +488,7 @@ for iRaw=1:nRawFiles
     Raw.channel(iRaw) = numberTokens(1);
     Raw.sweep(iRaw) = numberTokens(2);
     Raw.epoch(iRaw) = WaveHeader.state.epoch;
-    Raw.pulse(iRaw) = WaveHeader.state.cycle.pulseToUse0;
+    Raw.pulse(iRaw) = WaveHeader.state.cycle.(sprintf('pulseToUse%d',numberTokens(1)));
 end % Struct array aligned to acq name
 end
 
@@ -544,6 +540,29 @@ function Meta = grabMeta(sample)
     Meta = struct(...
         'timer_version', SampleHeader.state.software.timerVersion,...
         'startup_time', datetime(timeString, 'InputFormat', 'M/d/y HH:mm:ss'));
+end
+
+% GETSTARTTIME
+% Given the autonotes cell array, find the latest break-in time for each
+% channel, then make the session start the earlier of those two times. If
+% no break-in time was noted, make startup time the scanImage startup time
+function startToken = getStartTime(Data)
+    startTokens = regexp(Data.autonotes, '(.+): Broke into cell on channel #(\d)','tokens', 'once');
+    validTokens = startTokens(~cellfun('isempty',startTokens));
+    if ~isempty(validTokens)
+        % Get the last break-in for each channel
+        channelOfToken = cellfun(@(c) str2double(c{2}), validTokens, 'uni', 1);
+        channels = unique(channelOfToken);
+        NC = length(channels);
+        lastBreakIn = zeros(1,NC);
+        for ch = 1:NC
+            currentChannel = channels(ch);
+            lastBreakIn(ch) = find(channelOfToken==currentChannel,1,'last');
+        end
+        startToken = startTokens{min(lastBreakIn)}{1,1}; 
+    else
+        startToken = Data.meta.startup_time; % Fallback
+    end
 end
 
 % GRABCELLPARAM
