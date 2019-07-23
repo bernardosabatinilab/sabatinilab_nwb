@@ -36,9 +36,8 @@ Data = grabData(cellDirectory, fileNames);
 
 nwbFile.general_notes = strjoin(Data.mynotes, newline);
 
-% session is defined as initial cell break-in
-sessionStartToken = getStartTime(Data);
-nwbFile.session_start_time = datetime(sessionStartToken,'InputFormat', 'dd-MMM-y HH:mm:ss');
+% session is defined as ScanImage startup time
+nwbFile.session_start_time = Data.meta.startup_time;
 
 %% metadata
 scanimageMetadata = types.sb_scanimage.ScanImageMetaData(...
@@ -63,7 +62,7 @@ multiclamp_path = '/general/devices/Multiclamp 700B';
 
 axopatch_link = types.untyped.SoftLink(axopatch_path);
 multiclamp_link = types.untyped.SoftLink(multiclamp_path);
-channel2PathMap = containers.Map('KeyType', 'double', 'ValueType', 'char');
+channel2NwbPath = containers.Map('KeyType', 'double', 'ValueType', 'char');
 for iChannel=1:length(Data.channels)
     channel = Data.channels(iChannel);
     switch channel.type
@@ -78,10 +77,9 @@ for iChannel=1:length(Data.channels)
     channelName = sprintf('Channel %d', channel.label);
     electrode = types.core.IntracellularElectrode(...
         'description', [channelName ' electrode'],...
-        'filtering', sprintf('Gain: %d', channel.gain),...
         'device', channel_device);
     nwbFile.general_intracellular_ephys.set(channelName, electrode);
-    channel2PathMap(channel.label) = ['/general/intracellular_ephys/', channelName];
+    channel2NwbPath(channel.label) = ['/general/intracellular_ephys/', channelName];
 end
 
 %% Sweep Table
@@ -170,16 +168,17 @@ for iAvg=1:length(Data.average.data)
     channel = Data.average.channel(iAvg);
     pulse = Data.average.pulse(iAvg);
     sweeps = Data.average.sweep_group{iAvg};
+    startTimeMinutes = Data.average.minutes(iAvg);
+    clampType = Data.average.clampType(iAvg);
     
-    startTimeMinutes = Data.acqTime(Data.acqSweeps == min(sweeps));
-    
-    averageName = sprintf('Channel %d Epoch %d Pulse %d', channel, epoch, pulse);
+    clampTypeFormatted = lower(char(clampType));
+    averageName = sprintf('AD%d_e%dp%davg_%sClamp',...
+        channel, epoch, pulse, clampTypeFormatted);
     channelIdx = [Data.channels.label] == channel;
-    electrodeLink = types.untyped.SoftLink(channel2PathMap(channel));
+    electrodeLink = types.untyped.SoftLink(channel2NwbPath(channel));
     
-    clampType = Data.channels(channelIdx).clampType;
-    gain = Data.channels(channelIdx).gain;
     rate = Data.channels(channelIdx).inputRate;
+    
     formatSweeps = num2cell(sweeps);
     for iFormatSweeps=1:length(formatSweeps)
         formatSweeps{iFormatSweeps} = num2str(formatSweeps{iFormatSweeps});
@@ -192,7 +191,7 @@ for iAvg=1:length(Data.average.data)
         'electrode', electrodeLink,...
         'starting_time', startTimeMinutes * 60,...
         'starting_time_rate', rate,...
-        'gain', gain);
+        'gain', 0); % TODO provide a scalar gain value that makes sense here.
     nwbFile.analysis.set(averageName, clampSeries);
 end
 
@@ -206,14 +205,15 @@ for iData=1:length(Data.raw.data)
     sweep = Data.raw.sweep(iData);
     pulse = Data.raw.pulse(iData);
     acqIdx = Data.acqSweeps == sweep;
+    clampType = Data.raw.clampType(iData);
+    gain = Data.raw.gain(iData);
+    startTimeMinutes = Data.raw.minutes(iData);
     
-    acquisitionName = sprintf('Channel %d Sweep %03d', channel, sweep);
+    clampTypeFormatted = lower(char(clampType));
+    acquisitionName = sprintf('AD%d_%03d_%sClamp', channel, sweep, clampTypeFormatted);
     channelIdx = [Data.channels.label] == channel;
-    electrodeLink = types.untyped.SoftLink(channel2PathMap(channel));
-    clampType = Data.channels(channelIdx).clampType;
-    gain = Data.channels(channelIdx).gain;
+    electrodeLink = types.untyped.SoftLink(channel2NwbPath(channel));
     rate = Data.channels(channelIdx).inputRate;
-    startTimeMinutes = Data.acqTime(acqIdx);
     clampSeries = initClampSeries(clampType,...
         'starting_time', startTimeMinutes * 60,... in Seconds
         'starting_time_rate', rate,...
@@ -238,7 +238,7 @@ seriesReferenceColumn = types.core.VectorData(...
 seriesReferencePath = '/general/intracellular_ephys/sweep_table/series';
 seriesIndexColumn = types.core.VectorIndex(...
     'target', types.untyped.ObjectView(seriesReferencePath),...
-    'data', 1:length(Data.raw.sweep));  % 1:1 index
+    'data', 1:length(Data.raw.sweep));
 nwbFile.general_intracellular_ephys_sweep_table.series = seriesReferenceColumn;
 nwbFile.general_intracellular_ephys_sweep_table.series_index = seriesIndexColumn;
 
@@ -262,7 +262,7 @@ end
 nwbExport(nwbFile, fullfile(outDir, [cellName '.nwb']));
 end
 
-% INITCLAMPSERIES
+%% INITCLAMPSERIES
 % Given clamp type, return initialized clamp
 function Clamp = initClampSeries(clampType, varargin)
 assert(isa(clampType, 'experiment.ClampType'), 'first argument must be a clamp type');
@@ -287,7 +287,7 @@ switch clampType
 end
 end
 
-% LOADWAVE
+%% LOADWAVE
 % given wave .mat file, returns Wave
 % this method is used to bypass the fact that the Wave class doesn't exist.
 function Wave = loadWave(varargin)
@@ -298,7 +298,7 @@ Wave = Wave.(waveName{1});
 warning('on');
 end
 
-% GRABDATA
+%% GRABDATA
 % given list of file paths returns a Data struct with fields:
 %   channels:   grabChannels() struct
 %   raw:        grabRaw() struct
@@ -313,12 +313,22 @@ function Data = grabData(cellDirectory, fileNames)
 Data = struct();
 filePaths = fullfile(cellDirectory, fileNames);
 
+%% grab autonotes
+isAutonotes = strcmp(fileNames, 'autonotes.mat');
+assert(any(isAutonotes), 'autonotes.mat expected but not found');
+autonotes = load(filePaths{isAutonotes}, 'notebook');
+Data.autonotes = autonotes.notebook;
+fileNames(isAutonotes) = [];
+filePaths(isAutonotes) = [];
+
 %% grab raw data, channels, and meta
 isRawData = indexFromRegex(fileNames, 'AD\d_\d+\.mat');
 rawFiles = filePaths(isRawData);
-Data.raw = grabRaw(rawFiles);
-Data.channels = grabChannels(cellDirectory, fileNames(isRawData));
 Data.meta = grabMeta(rawFiles{1});
+
+% find break-in times
+Data.raw = grabRaw(rawFiles, Data.meta.startup_time);
+Data.channels = grabChannels(cellDirectory, fileNames(isRawData));
 fileNames(isRawData) = [];
 filePaths(isRawData) = [];
 
@@ -326,7 +336,7 @@ filePaths(isRawData) = [];
 isAnalysedData = indexFromRegex(fileNames, 'AD\d_e\d+p\d+avg\.mat');
 assert(any(isAnalysedData), 'Found no averaged data.');
 analysedPaths = filePaths(isAnalysedData);
-Data.average = grabAverage(analysedPaths);
+Data.average = grabAverage(analysedPaths, Data.meta.startup_time);
 fileNames(isAnalysedData) = [];
 filePaths(isAnalysedData) = [];
 
@@ -355,33 +365,32 @@ if any(isJpg)
     Image = struct(...
         'name', {allocNested},...
         'data', {allocNested},...
-        'info', struct());
+        'info', struct([]));
     for iImage=1:length(imagePaths)
         fPath = imagePaths{iImage};
         [~, fName, ~] = fileparts(fPath);
         Image.name{iImage} = fName;
         Image.data{iImage} = imread(fPath);
-        Image.info(iImage) = imfinfo(fPath);
+        imageInfo = imfinfo(fPath);
+        if isempty(Image.info)
+            Image.info = imageInfo;
+        else
+            Image.info(iImage) = imageInfo;
+        end
     end
 end
 fileNames(isJpg) = [];
 filePaths(isJpg) = [];
-
-%% grab autonotes
-isAutonotes = strcmp(fileNames, 'autonotes.mat');
-assert(any(isAutonotes), 'autonotes.mat expected but not found');
-autonotes = load(filePaths{isAutonotes}, 'notebook');
-Data.autonotes = autonotes.notebook;
 
 %% grab mynotes
 isMynotes = strcmp(fileNames, 'mynotes.mat');
 assert(any(isMynotes), 'mynotes.mat expected but not found');
 mynotes = load(filePaths{isMynotes}, 'notebook');
 Data.mynotes = mynotes.notebook;
+fileNames(isMynotes) = [];
+filePaths(isMynotes) = [];
 
 %% check for leftovers
-uniqueFileIndex = isMynotes | isAutonotes;
-fileNames(uniqueFileIndex) = [];
 ignoreList = {'physAcqTime.mat'};
 fileNames = setdiff(fileNames, ignoreList);
 if ~isempty(fileNames)
@@ -395,7 +404,7 @@ if ~isempty(fileNames)
 end
 end
 
-% INDEXFROMREGEX
+%% INDEXFROMREGEX
 % given list of filenames and patterns, returns logical index into filenames
 % of matches
 function indices = indexFromRegex(filenames, pattern)
@@ -403,15 +412,13 @@ matches = regexp(filenames, pattern, 'once');
 indices = ~cellfun('isempty', matches);
 end
 
-% GRABCHANNEL
+%% GRABCHANNEL
 % Given a raw sample, extracts relevant channel data as
 % Channel = array of structs with fields:
 %   label:          double indicating label of channel (NOTE not necessarily aligned with 0, 1)
 %   type:           experiment.PatchType
 %   outputRate:     double (Hz)
 %   inputRate:      double (Hz)
-%   clampType:      experiment.ClampType
-%   gain: double
 function Channels = grabChannels(cellDirectory, rawFiles)
 channelLabels = regexp(rawFiles, 'AD(\d)_\d+\.mat', 'tokens', 'once');
 for iLabel=1:length(channelLabels)
@@ -424,25 +431,11 @@ Raw = loadWave(fullfile(cellDirectory, rawFiles{1}));
 RawHeader = header.deserialize(Raw.UserData.headerString);
 ChannelSettings = RawHeader.state.phys.settings;
 
-clampTypes = {ChannelSettings.currentClamp0, ChannelSettings.currentClamp1};
-clampTypes = clampTypes(channelLabels+1);
-for iClamp=1:length(clampTypes)
-    if clampTypes{iClamp}
-        clampTypes{iClamp} = experiment.ClampType.Current;
-    else
-        clampTypes{iClamp} = experiment.ClampType.Voltage;
-    end
-end
-
-gain = {ChannelSettings.extraGain0, ChannelSettings.extraGain1};
-gain = gain(channelLabels+1);
 Channels = struct(...
     'label', num2cell(channelLabels),...
     'type', experiment.PatchType.NoPatch,...
     'outputRate', ChannelSettings.outputRate,...
-    'inputRate', ChannelSettings.inputRate,...
-    'clampType', clampTypes,...
-    'gain', gain);
+    'inputRate', ChannelSettings.inputRate);
 
 for iChannel=1:length(Channels)
     channelTypeProperty = sprintf('channelType%d', iChannel - 1);
@@ -451,24 +444,31 @@ for iChannel=1:length(Channels)
 end
 end
 
-% GRABRAW
-% Given a list of raw file names:
+%% GRABRAW
+% Given a list of raw file names and minutesOffset from scanimage start time aligned to sweep number
 % Raw = struct with fields:
-%   data:         { sweep data }
-%   sweep:        [ sweep number ]
-%   channel:      [ channel number ]
-%   epoch:        [ epoch number ]
-%   pulse:        [ pulse number ]
-function Raw = grabRaw(rawFiles)
+%   data:               { sweep data }
+%   sweep:              [ sweep number ]
+%   channel:            [ channel number ]
+%   epoch:              [ epoch number ]
+%   pulse:              [ pulse number ]
+%   clampType:          [ clamp type ]
+%   gain:               [ gain mV? ]
+%   minutes:            [ minutes in cell since scanimage start time]
+function Raw = grabRaw(rawFiles, scanimageStartTime)
 nRawFiles = length(rawFiles);
 allocZeros = zeros(nRawFiles, 1);
 allocNested = cell(nRawFiles, 1);
+allocClampTypes = repmat(experiment.ClampType.Voltage, nRawFiles, 1);
 Raw = struct(...
     'data', {allocNested},...
     'sweep', allocZeros,...
     'channel', allocZeros,...
     'epoch', allocZeros,...
-    'pulse', allocZeros);
+    'pulse', allocZeros,...
+    'clampType', allocClampTypes,...
+    'gain', allocZeros,...
+    'minutes', allocZeros);
 for iRaw=1:nRawFiles
     fPath = rawFiles{iRaw};
     [~, fName, ~] = fileparts(fPath);
@@ -476,16 +476,56 @@ for iRaw=1:nRawFiles
     % note, we don't use WaveHeader.UserData.name because it can be incorrect.
     rawTokens = regexp(fName, 'AD(\d)_(\d+)', 'tokens', 'once');
     numberTokens = str2double(rawTokens);
+    channelNumber = numberTokens(1);
+    sweepNumber = numberTokens(2);
+    
     WaveHeader = header.deserialize(Wave.UserData.headerString);
     Raw.data{iRaw} = Wave.data;
-    Raw.channel(iRaw) = numberTokens(1);
-    Raw.sweep(iRaw) = numberTokens(2);
+    Raw.channel(iRaw) = channelNumber;
+    Raw.sweep(iRaw) = sweepNumber;
     Raw.epoch(iRaw) = WaveHeader.state.epoch;
-    Raw.pulse(iRaw) = WaveHeader.state.cycle.(sprintf('pulseToUse%d',numberTokens(1)));
+    
+    pulsePropertyName = sprintf('pulseToUse%d', channelNumber);
+    Raw.pulse(iRaw) = WaveHeader.state.cycle.(pulsePropertyName);
+    
+    clampTypePropertyName = sprintf('currentClamp%d', channelNumber);
+    isCurrentClamp = WaveHeader.state.phys.settings.(clampTypePropertyName);
+    if isCurrentClamp
+        Raw.clampType(iRaw) = experiment.ClampType.Current;
+    else
+        Raw.clampType(iRaw) = experiment.ClampType.Voltage;
+    end
+    
+    gainPropertyName = sprintf('extraGain%d', channelNumber);
+    Raw.gain(iRaw) = WaveHeader.state.phys.settings.(gainPropertyName);
+    
+    CellParams = WaveHeader.state.phys.cellParams;
+    breakInTimePropertyName = sprintf('breakInTime%d', channelNumber);
+    breakInTime = CellParams.(breakInTimePropertyName);
+    minInCellPropertyName = sprintf('minInCell%d', channelNumber);
+    offsetMinutes = CellParams.(minInCellPropertyName);
+    Raw.minutes(iRaw) = offsetMinutes + grabBreakInOffset(breakInTime, scanimageStartTime);
 end % Struct array aligned to acq name
+
+% validate monotonically increasing time per channel
+availableChannels = unique(Raw.channel);
+for iChannel=1:length(availableChannels)
+    channelNumber = availableChannels(iChannel);
+    channelMask = Raw.channel == channelNumber;
+    
+    startTimes = Raw.minutes(channelMask);
+    sweepNumbers = Raw.sweep(channelMask);
+    [~, sortedIndex] = sort(sweepNumbers);
+    
+    % time is monotonically increasing when sorted by acquisition index
+    timeIsValid = all(0 < diff(startTimes(sortedIndex)));
+    if ~timeIsValid
+        Raw.minutes(channelMask) = 0;
+    end
+end
 end
 
-% GRABAVERAGE
+%% GRABAVERAGE
 % Given a list of file names containing averaged data
 % Average = struct with fields:
 %   data:        { averaged sweep data }
@@ -493,7 +533,9 @@ end
 %   epoch:       [ epoch # ]
 %   pulse:       [ pulse # ]
 %   sweep_group: { list of sweep #s associated with this average }
-function Average = grabAverage(analysedPaths)
+%   clampType:   [ clamp type ]
+%   minutes:  [ start time relative to session start in minutes ]
+function Average = grabAverage(analysedPaths, scanimageStartTime)
 allocZeros = zeros(size(analysedPaths));
 allocNested = cell(size(analysedPaths));
 Average = struct(...
@@ -501,64 +543,60 @@ Average = struct(...
     'channel', allocZeros,...
     'epoch', allocZeros,...
     'pulse', allocZeros,... % stimulus template index
-    'sweep_group', {allocNested});
+    'sweep_group', {allocNested},...
+    'minutes', allocZeros);
 for iAverage=1:length(analysedPaths)
     fPath = analysedPaths{iAverage};
     [~, fName, ~] = fileparts(fPath);
     tokens = regexp(fName, 'AD(\d)_e(\d+)p(\d+)avg', 'tokens', 'once');
     numberTokens = str2double(tokens);
-    Average.channel(iAverage) = numberTokens(1);
+    channelNumber = numberTokens(1);
+    Average.channel(iAverage) = channelNumber;
     Average.epoch(iAverage) = numberTokens(2);
     Average.pulse(iAverage) = numberTokens(3);
     Wave = loadWave(fPath);
     Average.data{iAverage} = Wave.data;
     
-    tokens = regexp(Wave.UserData.Components, 'AD\d_(\d+)', 'tokens', 'once');
-    for iTokens=1:length(tokens)
-        tokens(iTokens) = tokens{iTokens};
+    sweepGroupTokens = regexp(Wave.UserData.Components, 'AD\d_(\d+)', 'tokens', 'once');
+    for iTokens=1:length(sweepGroupTokens)
+        sweepGroupTokens(iTokens) = sweepGroupTokens{iTokens};
+    end % flatten nested cell array from regexp
+    Average.sweep_group{iAverage} = str2double(sweepGroupTokens);
+    
+    WaveHeader = header.deserialize(Wave.UserData.headerString);
+    
+    clampTypePropertyName = sprintf('currentClamp%d', channelNumber);
+    isCurrentClamp = WaveHeader.state.phys.settings.(clampTypePropertyName);
+    if isCurrentClamp
+        Average.clampType(iAverage) = experiment.ClampType.Current;
+    else
+        Average.clampType(iAverage) = experiment.ClampType.Voltage;
     end
-    Average.sweep_group{iAverage} = str2double(tokens);
+    
+    CellParams = WaveHeader.state.phys.cellParams;
+    breakInTimePropertyName = sprintf('breakInTime%d', channelNumber);
+    breakInTime = CellParams.(breakInTimePropertyName);
+    minInCellPropertyName = sprintf('minInCell%d', channelNumber);
+    offsetMinutes = CellParams.(minInCellPropertyName);
+    Average.minutes(iAverage) = offsetMinutes + grabBreakInOffset(breakInTime, scanimageStartTime);
 end
 end
 
-% GRABMETA
+%% GRABMETA
 % Given filenames, extracts ScanImage-specific metadata as
 % Meta = struct with fields:
 %   timer_version: double indicating software timer version
 %   startup_time:  datetime indicating ScanImage startup time
 function Meta = grabMeta(sample)
-    Wave = loadWave(sample);
-    SampleHeader = header.deserialize(Wave.UserData.headerString);
-    timeString = SampleHeader.state.internal.startupTimeString;
-    Meta = struct(...
-        'timer_version', SampleHeader.state.software.timerVersion,...
-        'startup_time', datetime(timeString, 'InputFormat', 'M/d/y HH:mm:ss'));
+Wave = loadWave(sample);
+SampleHeader = header.deserialize(Wave.UserData.headerString);
+timeString = SampleHeader.state.internal.startupTimeString;
+Meta = struct(...
+    'timer_version', SampleHeader.state.software.timerVersion,...
+    'startup_time', datetime(timeString, 'InputFormat', 'M/d/y HH:mm:ss'));
 end
 
-% GETSTARTTIME
-% Given the autonotes cell array, find the latest break-in time for each
-% channel, then make the session start the earlier of those two times. If
-% no break-in time was noted, make startup time the scanImage startup time
-function startToken = getStartTime(Data)
-    startTokens = regexp(Data.autonotes, '(.+): Broke into cell on channel #(\d)','tokens', 'once');
-    validTokens = startTokens(~cellfun('isempty',startTokens));
-    if ~isempty(validTokens)
-        % Get the last break-in for each channel
-        channelOfToken = cellfun(@(c) str2double(c{2}), validTokens, 'uni', 1);
-        channels = unique(channelOfToken);
-        NC = length(channels);
-        lastBreakIn = zeros(1,NC);
-        for ch = 1:NC
-            currentChannel = channels(ch);
-            lastBreakIn(ch) = find(channelOfToken==currentChannel,1,'last');
-        end
-        startToken = startTokens{min(lastBreakIn)}{1,1}; 
-    else
-        startToken = Data.meta.startup_time; % Fallback
-    end
-end
-
-% GRABCELLPARAM
+%% GRABCELLPARAM
 % Given a list of cell parameter file names
 % All array data is physAcqTrace-aligned.
 % All parameters are separated by channel ID
@@ -602,4 +640,20 @@ for iParams=1:length(paramPaths)
     Wave = loadWave(fPath, fName);
     CellParams(channelIndex).(cellParam) = real(Wave.data(validTraces));
 end
+end
+
+%% GRABBREAKINOFFSET
+% Gets break-in time offset in minutes given breakInTime string and scanimage start time datetime
+function offset=grabBreakInOffset(breakInTimeString, scanimageStartTime)
+breakInTime = datetime(breakInTimeString, 'InputFormat', 'HH:mm:ss');
+if isnat(breakInTime)
+    offset = 0; % default is 0 from scanimageStartTime
+    return;
+end
+
+% make day and timezone match scanimageStartTime
+breakInTime.Year = scanimageStartTime.Year;
+breakInTime.Month = scanimageStartTime.Month;
+breakInTime.Day = scanimageStartTime.Day;
+offset = minutes(breakInTime - scanimageStartTime);
 end
